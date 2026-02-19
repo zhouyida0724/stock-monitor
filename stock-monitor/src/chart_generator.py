@@ -3,6 +3,7 @@ import logging
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional, Dict
@@ -504,6 +505,206 @@ class ChartGenerator:
         except Exception as e:
             self.logger.error(f"生成板块历史趋势图失败: {str(e)}")
             return None
+
+    def generate_sector_flow_pie_charts(self, df: pd.DataFrame, market_name: str = "") -> Dict[str, str]:
+        """
+        生成板块资金流向饼图（净流入和净流出）
+
+        Args:
+            df: 板块数据DataFrame，需包含 sector_name 和 main_inflow
+            market_name: 市场名称（A股/美股/港股）
+
+        Returns:
+            Dict[str, str]: {'inflow': 净流入饼图路径, 'outflow': 净流出饼图路径}
+        """
+        if df is None or df.empty:
+            self.logger.warning("无数据，无法生成饼图")
+            return {}
+
+        inflow_col = self._get_inflow_column(df)
+        if not inflow_col:
+            self.logger.error("无法确定净流入列")
+            return {}
+
+        # 确保有 sector_name 列
+        sector_col = 'sector_name' if 'sector_name' in df.columns else 'name'
+        if sector_col not in df.columns:
+            self.logger.error("数据中缺少板块名称列")
+            return {}
+
+        # 转换单位为亿元
+        df = df.copy()
+        df['inflow_yi'] = df[inflow_col] / 1e8
+
+        # 分离净流入和净流出
+        inflow_df = df[df['inflow_yi'] > 0].sort_values('inflow_yi', ascending=False)
+        outflow_df = df[df['inflow_yi'] < 0].sort_values('inflow_yi', ascending=True)
+
+        result = {}
+
+        # 生成净流入饼图
+        if not inflow_df.empty:
+            result['inflow'] = self._create_pie_chart(
+                inflow_df.head(10),
+                f"{'[' + market_name + '] ' if market_name else ''}板块资金净流入 TOP10",
+                "净流入(亿元)",
+                plt.cm.Greens
+            )
+
+        # 生成净流出饼图
+        if not outflow_df.empty:
+            result['outflow'] = self._create_pie_chart(
+                outflow_df.head(10),
+                f"{'[' + market_name + '] ' if market_name else ''}板块资金净流出 TOP10",
+                "净流出(亿元)",
+                plt.cm.Reds,
+                absolute_values=True
+            )
+
+        return result
+
+    def _create_pie_chart(self, df: pd.DataFrame, title: str, label: str,
+                          colormap, absolute_values: bool = False) -> str:
+        """
+        创建单个饼图
+
+        Args:
+            df: 数据DataFrame
+            title: 图表标题
+            label: 数据标签
+            colormap: 颜色映射
+            absolute_values: 是否使用绝对值（用于净流出）
+
+        Returns:
+            str: 图表文件路径
+        """
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        # 准备数据
+        sector_col = 'sector_name' if 'sector_name' in df.columns else 'name'
+        labels = df[sector_col].tolist()
+        values = df['inflow_yi'].abs().values if absolute_values else df['inflow_yi'].values
+
+        # 计算百分比
+        total = values.sum()
+        if total == 0:
+            self.logger.warning(f"{title} 总值为0，无法生成饼图")
+            return None
+
+        # 颜色
+        colors = colormap(np.linspace(0.3, 0.9, len(labels)))
+
+        # 突出显示最大的扇区
+        explode = [0.05 if i == 0 else 0 for i in range(len(labels))]
+
+        # 创建饼图
+        wedges, texts, autotexts = ax.pie(
+            values,
+            labels=labels,
+            autopct=lambda pct: f'{pct:.1f}%\n({pct*total/100:.1f}亿)',
+            colors=colors,
+            explode=explode,
+            startangle=90,
+            textprops={'fontsize': 9}
+        )
+
+        # 设置标题
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+
+        # 添加总计信息
+        total_text = f"总计: {total:.1f}亿"
+        ax.text(0, -1.3, total_text, ha='center', fontsize=11, fontweight='bold')
+
+        plt.tight_layout()
+
+        # 保存
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        chart_type = 'inflow' if '净流入' in title else 'outflow'
+        chart_file = self.charts_path / f"pie_{chart_type}_{timestamp}.png"
+        plt.savefig(chart_file, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+
+        self.logger.info(f"饼图已保存: {chart_file}")
+        return str(chart_file)
+
+    def generate_market_flow_summary_chart(self, df: pd.DataFrame, market_name: str = "") -> str:
+        """
+        生成市场整体资金流向摘要图（净流入 vs 净流出对比）
+
+        Args:
+            df: 板块数据DataFrame
+            market_name: 市场名称
+
+        Returns:
+            str: 图表文件路径
+        """
+        if df is None or df.empty:
+            return None
+
+        inflow_col = self._get_inflow_column(df)
+        if not inflow_col:
+            return None
+
+        df = df.copy()
+        df['inflow_yi'] = df[inflow_col] / 1e8
+
+        # 统计
+        total_inflow = df[df['inflow_yi'] > 0]['inflow_yi'].sum()
+        total_outflow = df[df['inflow_yi'] < 0]['inflow_yi'].sum()
+        net_flow = total_inflow + total_outflow
+
+        inflow_sectors = (df['inflow_yi'] > 0).sum()
+        outflow_sectors = (df['inflow_yi'] < 0).sum()
+
+        # 创建图表
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # 左图：资金净流入/流出对比
+        ax1 = axes[0]
+        categories = ['净流入', '净流出', '净流入', '净流出']
+        values = [total_inflow, abs(total_outflow), inflow_sectors, outflow_sectors]
+        colors = ['#2ecc71', '#e74c3c', '#2ecc71', '#e74c3c']
+
+        bars = ax1.bar(categories, values, color=colors, alpha=0.8)
+        ax1.set_ylabel('金额(亿元) / 板块数量', fontsize=11)
+        ax1.set_title(f"{'[' + market_name + '] ' if market_name else ''}市场整体资金流向", fontsize=12, fontweight='bold')
+
+        # 在柱状图上添加数值
+        for bar, val in zip(bars, values):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{val:.1f}', ha='center', va='bottom', fontsize=10)
+
+        ax1.grid(True, alpha=0.3, axis='y')
+
+        # 右图：净流入/净流出占比饼图
+        ax2 = axes[1]
+        sizes = [total_inflow, abs(total_outflow)]
+        labels = [f'净流入\n{total_inflow:.1f}亿\n({inflow_sectors}个板块)',
+                  f'净流出\n{abs(total_outflow):.1f}亿\n({outflow_sectors}个板块)']
+        colors_pie = ['#2ecc71', '#e74c3c']
+
+        if sum(sizes) > 0:
+            wedges, texts = ax2.pie(
+                sizes,
+                labels=labels,
+                colors=colors_pie,
+                autopct='%1.1f%%',
+                startangle=90,
+                textprops={'fontsize': 10}
+            )
+            ax2.set_title(f"净流入 vs 净流出占比\n净流向: {net_flow:+.1f}亿", fontsize=12, fontweight='bold')
+
+        plt.tight_layout()
+
+        # 保存
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        chart_file = self.charts_path / f"flow_summary_{market_name}_{timestamp}.png"
+        plt.savefig(chart_file, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close()
+
+        self.logger.info(f"资金流向摘要图已保存: {chart_file}")
+        return str(chart_file)
 
     def cleanup_old_charts(self, keep_days: int = 7):
         """

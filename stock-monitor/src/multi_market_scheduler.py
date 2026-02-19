@@ -94,13 +94,13 @@ class MultiMarketScheduler:
         return self._fetchers[market]
     
     async def run_single_market(self, market: str) -> Dict:
-        """运行单个市场的监控任务
+        """运行单个市场的监控任务（增强版：包含完整数据用于图表生成）
         
         Args:
             market: 市场类型 ('a_share', 'us', 'hk')
             
         Returns:
-            Dict: 运行结果
+            Dict: 运行结果，包含完整数据
         """
         today = datetime.now().strftime('%Y-%m-%d')
         self.logger.info(f"=== 开始执行 {market.upper()} 板块监控 [{today}] ===")
@@ -109,8 +109,10 @@ class MultiMarketScheduler:
             'market': market,
             'success': False,
             'top10': None,
+            'full_data': None,  # 新增：完整数据
             'rotation_signals': [],
-            'error': None
+            'error': None,
+            'chart_files': []   # 新增：该市场生成的图表
         }
         
         try:
@@ -118,11 +120,18 @@ class MultiMarketScheduler:
             fetcher = self._get_fetcher(market)
             
             # 2. 获取板块数据
-            self.logger.info(f"[{market}] 步骤 1/4: 获取板块数据...")
+            self.logger.info(f"[{market}] 步骤 1/5: 获取板块数据...")
             today_df = fetcher.get_sector_data(today)
             
+            if today_df is None or today_df.empty:
+                result['error'] = "获取数据为空"
+                return result
+            
+            # 保存完整数据
+            result['full_data'] = today_df
+            
             # 3. 计算排名
-            self.logger.info(f"[{market}] 步骤 2/4: 计算TOP10排名...")
+            self.logger.info(f"[{market}] 步骤 2/5: 计算TOP10排名...")
             top10_df = self.analyzer.rank_by_inflow(today_df, top_n=10)
             result['top10'] = top10_df
             
@@ -131,12 +140,11 @@ class MultiMarketScheduler:
             self.logger.info(f"[{market}] 今日TOP3: {summary}")
             
             # 4. 保存数据（使用市场前缀区分）
-            self.logger.info(f"[{market}] 步骤 3/4: 保存数据快照...")
-            market_prefix = f"{market}_"
+            self.logger.info(f"[{market}] 步骤 3/5: 保存数据快照...")
             self._save_market_snapshot(today_df, today, market)
             
             # 5. 检测轮动
-            self.logger.info(f"[{market}] 步骤 4/4: 检测板块轮动...")
+            self.logger.info(f"[{market}] 步骤 4/5: 检测板块轮动...")
             last_trade_date = self._get_last_trade_date(market, today)
             yesterday_df = self._load_market_snapshot(last_trade_date, market)
             
@@ -148,6 +156,12 @@ class MultiMarketScheduler:
                 self.logger.warning(f"[{market}] 未找到昨日数据 ({last_trade_date})，跳过轮动检测")
                 rotation_signals = []
             
+            # 6. 生成市场专属图表（新增）
+            self.logger.info(f"[{market}] 步骤 5/5: 生成资金流向图表...")
+            if self.chart_generator:
+                chart_files = self._generate_market_charts(today_df, market)
+                result['chart_files'] = chart_files
+            
             result['success'] = True
             self.logger.info(f"=== {market.upper()} 任务执行完成 ===")
             
@@ -156,6 +170,44 @@ class MultiMarketScheduler:
             result['error'] = str(e)
         
         return result
+    
+    def _generate_market_charts(self, df: pd.DataFrame, market: str) -> List[str]:
+        """为指定市场生成图表
+        
+        Args:
+            df: 板块数据
+            market: 市场类型
+            
+        Returns:
+            List[str]: 生成的图表文件路径列表
+        """
+        chart_files = []
+        market_names = {'a_share': 'A股', 'us': '美股', 'hk': '港股'}
+        market_name = market_names.get(market, market)
+        
+        try:
+            # 1. 生成饼图（净流入和净流出）
+            self.logger.info(f"[{market}] 生成资金流向饼图...")
+            pie_charts = self.chart_generator.generate_sector_flow_pie_charts(df, market_name)
+            if pie_charts.get('inflow'):
+                chart_files.append(pie_charts['inflow'])
+            if pie_charts.get('outflow'):
+                chart_files.append(pie_charts['outflow'])
+            
+            # 2. 生成整体资金流向摘要图
+            self.logger.info(f"[{market}] 生成资金流向摘要图...")
+            summary_chart = self.chart_generator.generate_market_flow_summary_chart(df, market_name)
+            if summary_chart:
+                chart_files.append(summary_chart)
+            
+            # 3. 生成趋势图（如果有足够历史数据）
+            # 这里使用现有的趋势图生成方法
+            # 可以后续根据需要扩展
+            
+        except Exception as e:
+            self.logger.warning(f"[{market}] 生成图表失败: {e}")
+        
+        return chart_files
     
     async def run_all_markets(self) -> Dict[str, Dict]:
         """运行所有启用的市场监控任务
@@ -196,41 +248,29 @@ class MultiMarketScheduler:
         return any_success
     
     async def _generate_multi_market_report(self, results: Dict[str, Dict]):
-        """生成多市场综合报告"""
+        """生成多市场综合报告（增强版：包含各市场独立图表）"""
         today = datetime.now().strftime('%Y-%m-%d')
-        
-        # 生成图表（多市场版本）
-        chart_files = []
-        if self.chart_generator:
-            try:
-                # 为每个市场生成趋势图
-                for market, result in results.items():
-                    if result.get('success') and result.get('top10') is not None:
-                        # 尝试生成该市场的趋势图
-                        pass  # 图表生成需要历史数据支持
-                
-                # 生成热力图
-                heatmap_chart = self.chart_generator.generate_market_heatmap(days=5)
-                if heatmap_chart:
-                    chart_files.append(heatmap_chart)
-                    
-            except Exception as e:
-                self.logger.warning(f"生成图表失败: {e}")
-        
+
+        # 收集所有图表文件
+        all_chart_files = []
+        for market, result in results.items():
+            if result.get('success') and result.get('chart_files'):
+                all_chart_files.extend(result['chart_files'])
+
         # 生成Markdown报告
         report = self.reporter.generate_multi_markdown(results)
-        
+
         # 发送报告
         if self.output_mode in ("telegram", "both") and self.notifier:
             await self.notifier.send_report(report)
-        
+
         if self.output_mode in ("notion", "both") and self.notion_writer:
             title = f"📊 多市场板块监控 - {today}"
             db_id = getattr(self.notion_writer, 'database_id', None)
             self.notion_writer.write_report(
                 title, report,
                 database_id=db_id,
-                chart_files=chart_files
+                chart_files=all_chart_files
             )
     
     def _save_market_snapshot(self, df, date_str: str, market: str):

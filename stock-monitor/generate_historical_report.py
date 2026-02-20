@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 生成2026年1月1日至现在的历史数据报表到Notion
+
+⚠️ 已弃用: 此脚本使用旧的数据获取器，建议使用 run_multi_market.py
 """
 import sys
 import asyncio
@@ -9,7 +11,7 @@ sys.path.insert(0, '.')
 import logging
 from datetime import datetime, timedelta
 from src.config import get_settings
-from src.data_fetcher import DataFetcher
+from src.data_fetchers import DataFetcherFactory, MarketType
 from src.analyzer import SectorAnalyzer
 from src.chart_generator import ChartGenerator
 from src.notion_writer import NotionWriter
@@ -22,8 +24,8 @@ async def generate_historical_report():
     
     settings = get_settings()
     
-    # 初始化组件
-    fetcher = DataFetcher()
+    # 初始化组件 - 使用 DataFetcherFactory
+    fetcher = DataFetcherFactory.create(MarketType.A_SHARE)
     analyzer = SectorAnalyzer(data_path=settings.DATA_PATH)
     chart_gen = ChartGenerator(data_path=settings.DATA_PATH, charts_path='./charts')
     notion = NotionWriter(
@@ -41,7 +43,7 @@ async def generate_historical_report():
     
     # 1. 获取今日板块列表（用于确定要获取历史的板块）
     logger.info("获取当前板块列表...")
-    today_df = fetcher.get_sector_flow()
+    today_df = fetcher.get_sector_data()
     top_sectors = today_df.nlargest(20, 'main_inflow')['sector_name'].tolist()
     logger.info(f"关注板块: {', '.join(top_sectors[:10])}...")
     

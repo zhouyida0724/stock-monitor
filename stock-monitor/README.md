@@ -285,7 +285,3 @@ python3 -m pytest tests/ --cov=src --cov-report=term-missing
 - `pydantic-settings`: 配置管理
 
 完整列表见 `requirements.txt`
-
-## 许可证
-
-MIT License

@@ -1,6 +1,5 @@
 # 股票板块轮动监控模块
 from .config import Settings, get_settings, get_enabled_markets, get_market_config
-from .data_fetcher import DataFetcher
 from .data_fetchers import (
     BaseDataFetcher,
     MarketType,
@@ -22,8 +21,6 @@ __all__ = [
     'get_settings',
     'get_enabled_markets',
     'get_market_config',
-    # 旧版数据获取器（兼容）
-    'DataFetcher',
     # 新版数据获取器
     'BaseDataFetcher',
     'MarketType',

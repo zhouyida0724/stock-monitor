@@ -2,6 +2,10 @@
 """
 股票板块轮动监控 - 主入口
 
+⚠️ 已弃用: 此入口仅支持A股，已被 run_multi_market.py 替代
+   请使用: python run_multi_market.py --market a_share
+   或: python run_multi_market.py --all (运行所有市场)
+
 使用方法:
     python main.py           # 启动定时调度
     python main.py --run-once  # 立即运行一次
@@ -14,7 +18,7 @@ import argparse
 from datetime import datetime
 
 from src.config import get_settings
-from src.data_fetcher import DataFetcher
+from src.data_fetchers import DataFetcherFactory, MarketType
 from src.analyzer import SectorAnalyzer
 from src.reporter import ReportGenerator
 from src.notifier import TelegramNotifier

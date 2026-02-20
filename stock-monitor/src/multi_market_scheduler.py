@@ -15,7 +15,6 @@ from .reporter import ReportGenerator
 from .notifier import TelegramNotifier
 from .notion_writer import NotionWriter
 from .chart_generator import ChartGenerator
-from .image_uploader import ImageUploader
 from .config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -66,7 +65,6 @@ class MultiMarketScheduler:
         notifier: Optional[TelegramNotifier] = None,
         notion_writer: Optional[NotionWriter] = None,
         chart_generator: Optional[ChartGenerator] = None,
-        image_uploader: Optional[ImageUploader] = None,
         output_mode: str = "notion",
         schedules: Optional[Dict[str, MarketSchedule]] = None
     ):
@@ -75,7 +73,6 @@ class MultiMarketScheduler:
         self.notifier = notifier
         self.notion_writer = notion_writer
         self.chart_generator = chart_generator
-        self.image_uploader = image_uploader
         self.output_mode = output_mode
 
         # 调度配置

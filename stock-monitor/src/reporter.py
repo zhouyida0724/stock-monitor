@@ -394,3 +394,114 @@ class ReportGenerator:
                 summaries.append(f"{market_name}: {' > '.join(top3)}")
 
         return ' | '.join(summaries) if summaries else "无数据"
+
+    def generate_single_market_markdown(self, market: str, result: Dict, market_display_name: str = None) -> str:
+        """生成单个市场的 Markdown 报告
+
+        Args:
+            market: 市场代码 ('a_share', 'us', 'hk')
+            result: run_single_market 返回的结果
+            market_display_name: 显示名称，默认从 market_names 映射
+
+        Returns:
+            str: Markdown 格式的报告
+        """
+        from datetime import datetime
+        
+        market_names = {'a_share': 'A股', 'us': '美股', 'hk': '港股'}
+        if market_display_name is None:
+            market_display_name = market_names.get(market, market)
+        
+        # 市场 emoji
+        market_emojis = {'a_share': '🇨🇳', 'us': '🇺🇸', 'hk': '🇭🇰'}
+        emoji = market_emojis.get(market, '📊')
+        
+        lines = []
+        lines.append(f"# {emoji} {market_display_name}板块资金流向")
+        lines.append("")
+        lines.append(f"**监控时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("")
+        
+        # TOP10 排名
+        if result.get('top10') is not None and not result['top10'].empty:
+            lines.append("## 🔥 TOP10 板块排名")
+            lines.append("")
+            
+            for idx, row in result['top10'].iterrows():
+                sector = row.get('sector_name', row.get('name', f'板块{idx+1}'))
+                change = row.get('change_pct', 0)
+                inflow = row.get('main_inflow', 0)
+                
+                # 单位转换
+                if market == 'a_share':
+                    inflow_display = self._format_inflow_a_share(inflow)
+                else:
+                    inflow_display = self._format_inflow_value(inflow)
+                
+                symbol = row.get('symbol', '')
+                symbol_str = f" ({symbol})" if symbol else ""
+                
+                lines.append(f"{idx+1}. **{sector}**{symbol_str} - {inflow_display} ({change:+.2f}%)")
+            lines.append("")
+        
+        # 轮动信号
+        lines.append("## 🔄 轮动信号")
+        lines.append("")
+        rotation_signals = result.get('rotation_signals', [])
+        if rotation_signals:
+            for signal in rotation_signals[:5]:
+                sector = signal.get('sector', '未知')
+                prev_rank = signal.get('prev_rank', '-')
+                lines.append(f"- ⬆️ **{sector}** (昨日排名: #{prev_rank})")
+        else:
+            lines.append("_今日无新进入TOP10的板块_")
+        lines.append("")
+        
+        # 图表占位
+        lines.append("## 📊 资金流向图表")
+        lines.append("")
+        lines.append("_图表将在此处显示_")
+        lines.append("")
+        
+        return '\n'.join(lines)
+
+    def _format_inflow_a_share(self, inflow: float) -> str:
+        """格式化A股资金流（单位：分 -> 亿元）
+        
+        Args:
+            inflow: 资金流（单位：分）
+            
+        Returns:
+            str: 格式化后的字符串
+        """
+        if inflow is None or inflow == 0:
+            return "0亿"
+        
+        # 分转亿元
+        inflow_yi = inflow / 1e8
+        
+        if abs(inflow_yi) >= 1:
+            return f"{inflow_yi:+.2f}亿"
+        elif abs(inflow_yi) >= 0.01:
+            return f"{inflow_yi:+.2f}亿"
+        else:
+            return f"{inflow:+.0f}分"
+
+    def _format_inflow_value(self, inflow: float) -> str:
+        """格式化资金流（通用）
+        
+        Args:
+            inflow: 资金流
+            
+        Returns:
+            str: 格式化后的字符串
+        """
+        if inflow is None or inflow == 0:
+            return "0"
+        
+        if abs(inflow) >= 1e8:
+            return f"{inflow/1e8:+.2f}亿"
+        elif abs(inflow) >= 1e4:
+            return f"{inflow/1e4:+.2f}万"
+        else:
+            return f"{inflow:+.2f}"

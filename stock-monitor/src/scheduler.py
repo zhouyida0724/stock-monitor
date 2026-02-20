@@ -1,4 +1,9 @@
-"""调度器模块 - APScheduler定时任务"""
+"""
+调度器模块 - APScheduler定时任务
+
+⚠️ 已弃用: 此模块仅支持A股，已被 multi_market_scheduler.py 替代
+   请使用: from src.multi_market_scheduler import MultiMarketScheduler
+"""
 import logging
 import asyncio
 from datetime import datetime
@@ -6,7 +11,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from typing import Optional, Union
 
-from .data_fetcher import DataFetcher
+from .data_fetchers import DataFetcherFactory, MarketType, BaseDataFetcher
 from .analyzer import SectorAnalyzer
 from .reporter import ReportGenerator
 from .notifier import TelegramNotifier
@@ -22,7 +27,7 @@ class MonitorScheduler:
     
     def __init__(
         self,
-        data_fetcher: DataFetcher,
+        data_fetcher: BaseDataFetcher,
         analyzer: SectorAnalyzer,
         reporter: ReportGenerator,
         notifier: Optional[TelegramNotifier] = None,
@@ -68,7 +73,7 @@ class MonitorScheduler:
         try:
             # 1. 获取今日数据
             self.logger.info("步骤 1/5: 获取板块资金流数据...")
-            today_df = self.data_fetcher.get_sector_flow(today)
+            today_df = self.data_fetcher.get_sector_data(today)
             
             # 2. 计算排名
             self.logger.info("步骤 2/5: 计算TOP10排名...")

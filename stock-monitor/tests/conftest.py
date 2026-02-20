@@ -13,7 +13,7 @@ os.environ['TELEGRAM_CHAT_ID'] = '123456789'
 # 添加src到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.config import Settings
-from src.data_fetcher import DataFetcher
+from src.data_fetchers import BaseDataFetcher
 from src.analyzer import SectorAnalyzer
 from src.reporter import ReportGenerator
 from src.notifier import TelegramNotifier
@@ -107,7 +107,7 @@ def sample_rotation_signals():
 def mock_scheduler_components():
     """提供模拟的调度器组件"""
     return {
-        'data_fetcher': MagicMock(spec=DataFetcher),
+        'data_fetcher': MagicMock(spec=BaseDataFetcher),
         'analyzer': MagicMock(spec=SectorAnalyzer),
         'reporter': MagicMock(spec=ReportGenerator),
         'notifier': MagicMock(spec=TelegramNotifier),

@@ -26,7 +26,7 @@ class TestMonitorScheduler:
         """测试单次运行成功"""
         # 设置mock返回值
         mock_data = pd.DataFrame({'sector_name': ['A'], 'main_inflow': [100]})
-        mock_scheduler_components['data_fetcher'].get_sector_flow.return_value = mock_data
+        mock_scheduler_components['data_fetcher'].get_sector_data.return_value = mock_data
         mock_scheduler_components['analyzer'].rank_by_inflow.return_value = mock_data
         mock_scheduler_components['analyzer'].get_last_trading_date.return_value = '2024-02-14'
         mock_scheduler_components['analyzer'].load_snapshot.return_value = mock_data
@@ -39,7 +39,7 @@ class TestMonitorScheduler:
         
         assert result is True
         # 验证各组件被正确调用
-        mock_scheduler_components['data_fetcher'].get_sector_flow.assert_called_once()
+        mock_scheduler_components['data_fetcher'].get_sector_data.assert_called_once()
         mock_scheduler_components['analyzer'].rank_by_inflow.assert_called()
         mock_scheduler_components['analyzer'].save_snapshot.assert_called_once()
         mock_scheduler_components['notifier'].send_report.assert_called()
@@ -47,7 +47,7 @@ class TestMonitorScheduler:
     @pytest.mark.asyncio
     async def test_run_once_data_fetch_error(self, scheduler, mock_scheduler_components):
         """测试数据获取失败"""
-        mock_scheduler_components['data_fetcher'].get_sector_flow.side_effect = Exception("API Error")
+        mock_scheduler_components['data_fetcher'].get_sector_data.side_effect = Exception("API Error")
         mock_scheduler_components['notifier'].send_report = AsyncMock(return_value=True)
         
         result = await scheduler.run_once()
@@ -62,7 +62,7 @@ class TestMonitorScheduler:
     async def test_run_once_no_yesterday_data(self, scheduler, mock_scheduler_components):
         """测试无昨日数据的情况"""
         mock_data = pd.DataFrame({'sector_name': ['A'], 'main_inflow': [100]})
-        mock_scheduler_components['data_fetcher'].get_sector_flow.return_value = mock_data
+        mock_scheduler_components['data_fetcher'].get_sector_data.return_value = mock_data
         mock_scheduler_components['analyzer'].rank_by_inflow.return_value = mock_data
         mock_scheduler_components['analyzer'].get_last_trading_date.return_value = '2024-02-14'
         mock_scheduler_components['analyzer'].load_snapshot.return_value = None  # 无昨日数据
@@ -82,7 +82,7 @@ class TestMonitorScheduler:
         mock_data = pd.DataFrame({'sector_name': ['A', 'B'], 'main_inflow': [100, 90]})
         rotation_signals = [{'sector_name': 'B', 'yesterday_rank': 15}]
         
-        mock_scheduler_components['data_fetcher'].get_sector_flow.return_value = mock_data
+        mock_scheduler_components['data_fetcher'].get_sector_data.return_value = mock_data
         mock_scheduler_components['analyzer'].rank_by_inflow.return_value = mock_data
         mock_scheduler_components['analyzer'].get_last_trading_date.return_value = '2024-02-14'
         mock_scheduler_components['analyzer'].load_snapshot.return_value = mock_data
@@ -170,7 +170,7 @@ class TestMonitorScheduler:
     async def test_run_once_notifier_error(self, scheduler, mock_scheduler_components):
         """测试通知发送失败"""
         mock_data = pd.DataFrame({'sector_name': ['A'], 'main_inflow': [100]})
-        mock_scheduler_components['data_fetcher'].get_sector_flow.return_value = mock_data
+        mock_scheduler_components['data_fetcher'].get_sector_data.return_value = mock_data
         mock_scheduler_components['analyzer'].rank_by_inflow.return_value = mock_data
         mock_scheduler_components['analyzer'].get_last_trading_date.return_value = '2024-02-14'
         mock_scheduler_components['analyzer'].load_snapshot.return_value = None

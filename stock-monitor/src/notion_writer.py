@@ -11,14 +11,14 @@ logger = logging.getLogger(__name__)
 
 class NotionWriter:
     """Notion写入器类 - 将监控报告写入Notion页面"""
-    
+
     API_BASE = "https://api.notion.com/v1"
     API_VERSION = "2022-06-28"
-    
+
     def __init__(self, api_key: str, parent_page_id: str):
         """
         初始化Notion写入器
-        
+
         Args:
             api_key: Notion Integration API Key
             parent_page_id: 父页面ID（监控记录将创建在此页面下）
@@ -31,13 +31,13 @@ class NotionWriter:
             "Content-Type": "application/json"
         }
         self.logger = logging.getLogger(self.__class__.__name__)
-    
-    def write_report(self, title: str, content: str, database_id: Optional[str] = None, 
+
+    def write_report(self, title: str, content: str, database_id: Optional[str] = None,
                      chart_files: Optional[list] = None, chart_urls: Optional[list] = None,
                      auto_upload_charts: bool = True) -> Optional[str]:
         """
         写入监控报告到Notion
-        
+
         Args:
             title: 页面标题
             content: Markdown格式的报告内容
@@ -45,45 +45,163 @@ class NotionWriter:
             chart_files: 可选，图表文件路径列表（会自动上传到Notion）
             chart_urls: 可选，图表URL列表（如果提供则优先使用外部图片，兼容旧版Imgur）
             auto_upload_charts: 是否自动将chart_files上传到Notion（默认True）
-            
+
         Returns:
             Optional[str]: 创建的页面ID，失败返回None
         """
         try:
             # 解析Markdown内容为Notion blocks
             blocks = self._parse_markdown_to_blocks(content)
-            
+
             # 如果有图表，添加图表部分
             if chart_files:
                 chart_blocks = self._create_chart_blocks(chart_files, chart_urls, auto_upload_charts)
                 blocks.extend(chart_blocks)
-            
+
             # 创建页面
             page_id = self._create_page(title, blocks)
-            
+
             if page_id and database_id:
                 # 同时添加到数据库
                 self._add_to_database(database_id, title, content)
-            
+
             return page_id
-            
+
         except Exception as e:
             self.logger.error(f"写入Notion失败: {str(e)}")
             return None
-    
+
+    def write_report_with_market_charts(self, title: str, content: str,
+                                        market_chart_map: Dict[str, list],
+                                        market_names: Dict[str, str]) -> Optional[str]:
+        """
+        写入监控报告到Notion，图表紧跟在每个市场分析后
+
+        Args:
+            title: 页面标题
+            content: Markdown格式的报告内容
+            market_chart_map: 市场到图表文件列表的映射，如 {'a_share': ['chart1.png', ...]}
+            market_names: 市场代码到显示名称的映射，如 {'a_share': 'A股', ...}
+
+        Returns:
+            Optional[str]: 创建的页面ID，失败返回None
+        """
+        try:
+            # 1. 创建空页面
+            page_id = self._create_page(title, [])
+            if not page_id:
+                return None
+
+            # 2. 按市场分割内容并分别添加
+            sections = self._split_content_by_market(content, market_names)
+
+            for section in sections:
+                market_key = section.get('market')
+                section_content = section['content']
+
+                # 解析该部分的Markdown为blocks
+                blocks = self._parse_markdown_to_blocks(section_content)
+
+                # 添加该部分的内容
+                if blocks:
+                    self._add_blocks_to_page(page_id, blocks)
+
+                # 如果有图表，在该部分后添加
+                if market_key and market_key in market_chart_map:
+                    chart_files = market_chart_map[market_key]
+                    if chart_files:
+                        # 使用简化的图表blocks（不添加额外的标题）
+                        chart_blocks = self._create_simple_chart_blocks(chart_files)
+                        if chart_blocks:
+                            self._add_blocks_to_page(page_id, chart_blocks)
+
+            self.logger.info(f"成功创建带分市场图表的Notion页面: {page_id}")
+            return page_id
+
+        except Exception as e:
+            self.logger.error(f"写入Notion失败: {str(e)}")
+            return None
+
+    def _split_content_by_market(self, content: str, market_names: Dict[str, str]) -> list:
+        """
+        将内容按市场分割
+
+        Args:
+            content: Markdown内容
+            market_names: 市场名称映射
+
+        Returns:
+            list: 分割后的部分列表
+        """
+        sections = []
+        lines = content.split('\n')
+
+        current_market = None
+        current_content = []
+
+        # 开头的通用内容（标题等）
+        header_lines = []
+
+        for line in lines:
+            # 检测市场标题
+            is_market_header = False
+            for market_key, market_name in market_names.items():
+                # 匹配如 "## 🇨🇳 A股板块资金流向" 或 "## A股" 这样的标题
+                if (f'## ' in line and market_name in line) or (f'## 🇨🇳 {market_name}' in line) or (f'## 🇺🇸 {market_name}' in line) or (f'## 🇭🇰 {market_name}' in line):
+                    # 保存之前的内容
+                    if current_market is None and header_lines:
+                        # 第一个市场之前的通用内容
+                        sections.append({
+                            'market': None,
+                            'content': '\n'.join(header_lines)
+                        })
+                        header_lines = []
+                    elif current_content:
+                        sections.append({
+                            'market': current_market,
+                            'content': '\n'.join(current_content)
+                        })
+
+                    current_market = market_key
+                    current_content = [line]
+                    is_market_header = True
+                    break
+
+            if not is_market_header:
+                if current_market is None:
+                    header_lines.append(line)
+                else:
+                    current_content.append(line)
+
+        # 添加最后一个市场
+        if current_content:
+            sections.append({
+                'market': current_market,
+                'content': '\n'.join(current_content)
+            })
+
+        # 如果没有检测到任何市场，返回整个内容
+        if not sections:
+            sections = [{
+                'market': None,
+                'content': content
+            }]
+
+        return sections
+
     def _create_page(self, title: str, blocks: list) -> Optional[str]:
         """
         在Notion中创建页面
-        
+
         Args:
             title: 页面标题
             blocks: Notion block列表
-            
+
         Returns:
             Optional[str]: 页面ID
         """
         url = f"{self.API_BASE}/pages"
-        
+
         # 先创建空页面
         payload = {
             "parent": {"page_id": self.parent_page_id},
@@ -94,40 +212,40 @@ class NotionWriter:
                 }
             }
         }
-        
+
         try:
             response = requests.post(url, headers=self.headers, json=payload, timeout=30)
             response.raise_for_status()
             data = response.json()
             page_id = data.get("id")
             self.logger.info(f"成功创建Notion页面: {page_id}")
-            
+
             # 然后分批添加blocks
             if blocks and page_id:
                 self._add_blocks_to_page(page_id, blocks)
-            
+
             return page_id
-            
+
         except requests.exceptions.RequestException as e:
             self.logger.error(f"创建Notion页面请求失败: {str(e)}")
             raise
-    
+
     def _add_blocks_to_page(self, page_id: str, blocks: list):
         """
         分批添加blocks到页面
-        
+
         Args:
             page_id: 页面ID
             blocks: block列表
         """
         url = f"{self.API_BASE}/blocks/{page_id}/children"
-        
+
         # Notion限制每次最多100个blocks
         batch_size = 90
         for i in range(0, len(blocks), batch_size):
             batch = blocks[i:i+batch_size]
             payload = {"children": batch}
-            
+
             try:
                 response = requests.patch(url, headers=self.headers, json=payload, timeout=30)
                 response.raise_for_status()
@@ -145,24 +263,24 @@ class NotionWriter:
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"添加blocks失败: {str(e)}")
                 continue
-    
+
     def _add_to_database(self, database_id: str, title: str, content: str) -> bool:
         """
         添加记录到数据库
-        
+
         Args:
             database_id: 数据库ID
             title: 标题
             content: 内容摘要
-            
+
         Returns:
             bool: 是否成功
         """
         url = f"{self.API_BASE}/pages"
-        
+
         # 提取TOP3板块作为摘要
         summary = self._extract_summary(content)
-        
+
         payload = {
             "parent": {"database_id": database_id},
             "icon": {"type": "emoji", "emoji": "📈"},
@@ -173,35 +291,35 @@ class NotionWriter:
                 "状态": {"select": {"name": "已完成"}}
             }
         }
-        
+
         try:
             response = requests.post(url, headers=self.headers, json=payload, timeout=30)
             response.raise_for_status()
             self.logger.info("成功添加数据库记录")
             return True
-            
+
         except requests.exceptions.RequestException as e:
             self.logger.error(f"添加数据库记录失败: {str(e)}")
             return False
-    
+
     def _parse_markdown_to_blocks(self, markdown: str) -> list:
         """
         将Markdown内容解析为Notion blocks
-        
+
         Args:
             markdown: Markdown格式的报告
-            
+
         Returns:
             list: Notion block列表
         """
         blocks = []
         lines = markdown.split('\n')
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-            
+
             # 处理标题
             if line.startswith('# '):
                 blocks.append({
@@ -260,23 +378,23 @@ class NotionWriter:
                     "type": "paragraph",
                     "paragraph": {"rich_text": rich_text}
                 })
-        
+
         return blocks
-    
+
     def _parse_inline_formatting(self, text: str) -> list:
         """
         解析行内格式（粗体）
-        
+
         Args:
             text: 文本
-            
+
         Returns:
             list: rich_text列表
         """
         parts = []
         current = ""
         i = 0
-        
+
         while i < len(text):
             if i < len(text) - 1 and text[i:i+2] == "**":
                 if current:
@@ -297,22 +415,54 @@ class NotionWriter:
             else:
                 current += text[i]
                 i += 1
-        
+
         if current:
             parts.append({"type": "text", "text": {"content": current}})
-        
+
         return parts if parts else [{"type": "text", "text": {"content": text}}]
-    
-    def _create_chart_blocks(self, chart_files: list, chart_urls: list = None, 
+
+    def _create_simple_chart_blocks(self, chart_files: list) -> list:
+        """
+        创建简化的图表展示blocks（用于市场特定图表，不添加额外标题）
+
+        Args:
+            chart_files: 图表文件路径列表
+
+        Returns:
+            list: Notion block列表
+        """
+        blocks = []
+
+        for chart_file in chart_files:
+            if not chart_file or not Path(chart_file).exists():
+                continue
+
+            # 上传图片到Notion
+            file_upload_id = self.upload_image_to_notion(chart_file)
+            if file_upload_id:
+                blocks.append(self._create_image_block_with_file_upload(file_upload_id))
+            else:
+                # 上传失败，显示文件路径
+                blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{"type": "text", "text": {"content": f"📈 图表: {chart_file}"}}]
+                    }
+                })
+
+        return blocks
+
+    def _create_chart_blocks(self, chart_files: list, chart_urls: list = None,
                              auto_upload: bool = True) -> list:
         """
         创建图表展示blocks
-        
+
         Args:
             chart_files: 图表文件路径列表
             chart_urls: 图表URL列表（可选，如果提供则直接嵌入图片）
             auto_upload: 是否自动上传到Notion（默认True）
-            
+
         Returns:
             list: Notion block列表
         """
@@ -330,15 +480,15 @@ class NotionWriter:
                 }
             }
         ]
-        
+
         chart_urls = chart_urls or []
-        
+
         for i, chart_file in enumerate(chart_files):
             if not chart_file or not Path(chart_file).exists():
                 continue
-            
+
             chart_name = Path(chart_file).stem
-            
+
             # 添加图表标题
             blocks.append({
                 "object": "block",
@@ -347,7 +497,7 @@ class NotionWriter:
                     "rich_text": [{"type": "text", "text": {"content": self._get_chart_title(chart_name)}}]
                 }
             })
-            
+
             # 优先级1: 如果提供了外部URL，使用外部图片（保持兼容性）
             if i < len(chart_urls) and chart_urls[i]:
                 blocks.append({
@@ -372,13 +522,13 @@ class NotionWriter:
             # 优先级3: 显示本地文件路径
             else:
                 self._add_file_fallback_block(blocks, chart_file)
-        
+
         return blocks
-    
+
     def _add_file_fallback_block(self, blocks: list, chart_file: str):
         """
         添加文件路径后备block（当上传失败时使用）
-        
+
         Args:
             blocks: block列表
             chart_file: 图表文件路径
@@ -394,7 +544,7 @@ class NotionWriter:
                 "color": "blue_background"
             }
         })
-        
+
         blocks.append({
             "object": "block",
             "type": "code",
@@ -403,7 +553,7 @@ class NotionWriter:
                 "language": "plain text"
             }
         })
-    
+
     def _get_chart_title(self, chart_name: str) -> str:
         """根据文件名获取图表标题"""
         if "top_sectors_trend" in chart_name:
@@ -414,20 +564,20 @@ class NotionWriter:
             return "板块资金流向热力图"
         else:
             return "图表分析"
-    
+
     def _extract_summary(self, content: str) -> str:
         """
         从报告中提取TOP3板块作为摘要
-        
+
         Args:
             content: 报告内容
-            
+
         Returns:
             str: 摘要
         """
         lines = content.split('\n')
         top3 = []
-        
+
         for line in lines:
             if line.strip().startswith(('1.', '2.', '3.')) and '亿' in line:
                 # 提取板块名称
@@ -437,21 +587,21 @@ class NotionWriter:
                     top3.append(name)
                     if len(top3) >= 3:
                         break
-        
+
         return ' > '.join(top3) if top3 else '无数据'
-    
+
     def create_monitoring_database(self, title: str = "板块监控记录") -> Optional[str]:
         """
         创建监控记录数据库
-        
+
         Args:
             title: 数据库标题
-            
+
         Returns:
             Optional[str]: 数据库ID
         """
         url = f"{self.API_BASE}/data_sources"
-        
+
         payload = {
             "parent": {"page_id": self.parent_page_id},
             "title": [{"text": {"content": title}}],
@@ -471,7 +621,7 @@ class NotionWriter:
             },
             "is_inline": True
         }
-        
+
         try:
             response = requests.post(url, headers=self.headers, json=payload, timeout=30)
             response.raise_for_status()
@@ -479,15 +629,15 @@ class NotionWriter:
             database_id = data.get("id")
             self.logger.info(f"成功创建数据库: {database_id}")
             return database_id
-            
+
         except requests.exceptions.RequestException as e:
             self.logger.error(f"创建数据库失败: {str(e)}")
             return None
-    
+
     def test_connection(self) -> bool:
         """
         测试Notion API连接
-        
+
         Returns:
             bool: 连接是否成功
         """
@@ -497,20 +647,20 @@ class NotionWriter:
             response.raise_for_status()
             self.logger.info("Notion API连接测试成功")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Notion API连接测试失败: {str(e)}")
             return False
-    
+
     def upload_image_to_notion(self, image_path: str) -> Optional[str]:
         """
         上传图片到Notion（3步上传流程）
-        
+
         参考: https://developers.notion.com/guides/data-apis/uploading-small-files
-        
+
         Args:
             image_path: 图片文件路径
-            
+
         Returns:
             Optional[str]: file_upload ID，失败返回None
         """
@@ -519,11 +669,11 @@ class NotionWriter:
             if not file_path.exists():
                 self.logger.error(f"图片文件不存在: {image_path}")
                 return None
-            
+
             file_size = file_path.stat().st_size
             file_name = file_path.name
             file_ext = file_path.suffix.lower()
-            
+
             # 确定MIME类型
             mime_type = "image/png"  # 默认
             if file_ext == ".jpg" or file_ext == ".jpeg":
@@ -532,9 +682,9 @@ class NotionWriter:
                 mime_type = "image/gif"
             elif file_ext == ".webp":
                 mime_type = "image/webp"
-            
+
             self.logger.info(f"开始上传图片: {file_name} ({file_size} bytes)")
-            
+
             # Step 1: 创建上传对象
             step1_url = f"{self.API_BASE}/file_uploads"
             step1_payload = {
@@ -542,28 +692,28 @@ class NotionWriter:
                 "content_type": mime_type,
                 "content_length": file_size
             }
-            
+
             step1_headers = self.headers.copy()
             step1_headers["Content-Type"] = "application/json"
-            
+
             response = requests.post(
-                step1_url, 
-                headers=step1_headers, 
-                json=step1_payload, 
+                step1_url,
+                headers=step1_headers,
+                json=step1_payload,
                 timeout=30
             )
             response.raise_for_status()
             step1_data = response.json()
-            
+
             file_upload_id = step1_data.get("id")
             upload_url = step1_data.get("upload_url")
-            
+
             if not file_upload_id or not upload_url:
                 self.logger.error(f"创建上传对象失败: {step1_data}")
                 return None
-            
+
             self.logger.debug(f"上传对象创建成功: {file_upload_id}")
-            
+
             # Step 2: 上传文件内容 (multipart/form-data)
             with open(file_path, "rb") as f:
                 files = {"file": (file_name, f, mime_type)}
@@ -578,27 +728,27 @@ class NotionWriter:
                     timeout=60
                 )
                 upload_response.raise_for_status()
-            
+
             self.logger.debug(f"文件内容上传成功")
-            
+
             # Step 3: 返回file_upload ID用于创建image block
             self.logger.info(f"图片上传完成: {file_name} -> {file_upload_id}")
             return file_upload_id
-            
+
         except requests.exceptions.RequestException as e:
             self.logger.error(f"上传图片请求失败: {str(e)}")
             return None
         except Exception as e:
             self.logger.error(f"上传图片失败: {str(e)}")
             return None
-    
+
     def _create_image_block_with_file_upload(self, file_upload_id: str) -> Dict[str, Any]:
         """
         创建使用file_upload的image block
-        
+
         Args:
             file_upload_id: Notion file_upload ID
-            
+
         Returns:
             Dict: image block对象
         """

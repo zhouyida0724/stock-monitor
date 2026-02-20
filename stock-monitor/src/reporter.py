@@ -222,7 +222,7 @@ class ReportGenerator:
         if df is None or df.empty:
             return "_暂无资金流向数据_"
 
-        inflow = self._calculate_total_inflow(df)
+        inflow = self._calculate_total_inflow(df, market_name)
 
         if inflow is None:
             return "_资金流向数据计算失败_"
@@ -266,11 +266,12 @@ class ReportGenerator:
 """
         return analysis.strip()
 
-    def _calculate_total_inflow(self, df) -> Optional[Dict]:
+    def _calculate_total_inflow(self, df, market_name: str = "") -> Optional[Dict]:
         """计算市场整体资金流向统计
 
         Args:
             df: 板块数据
+            market_name: 市场名称，用于确定单位转换因子
 
         Returns:
             Dict: 资金流向统计
@@ -288,8 +289,23 @@ class ReportGenerator:
             if not inflow_col:
                 return None
 
+            # 根据市场类型确定单位转换因子
+            # A股: 原始数据是分，除以 1e8 得到亿元
+            # 美股/港股: 原始数据是价格*股数(美元/港币)，通常已经是合理数值，除以 1e4 得到亿元(假设)
+            if 'A股' in market_name or market_name == 'a_share':
+                divisor = 1e8  # 分 -> 亿元
+            else:
+                # 美股/港股：数值通常较小，检查中位数判断
+                median_val = df[inflow_col].abs().median()
+                if median_val < 1e6:  # 如果中位数小于100万，可能是已经处理过的值
+                    divisor = 1e4  # 假设单位是万元
+                elif median_val > 1e8:  # 如果中位数大于1亿，可能是原始分
+                    divisor = 1e8
+                else:
+                    divisor = 1e6  # 默认转换为百万元
+
             # 转换单位为亿元
-            df['inflow_yi'] = df[inflow_col] / 1e8
+            df['inflow_yi'] = df[inflow_col] / divisor
 
             # 计算统计
             total_inflow = df[df['inflow_yi'] > 0]['inflow_yi'].sum()

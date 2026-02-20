@@ -42,6 +42,11 @@ HK_SECTOR_ETFS = {
     "恒生医药": "2838.HK",      # 恒生医药指数
 }
 
+# 重试配置
+MAX_RETRIES = 3
+BASE_DELAY = 2  # 基础延迟秒数
+REQUEST_INTERVAL = 1.5  # 每次请求间隔秒数
+
 
 class HKMarketDataFetcher(BaseDataFetcher):
     """港股板块数据获取器
@@ -58,7 +63,7 @@ class HKMarketDataFetcher(BaseDataFetcher):
         self.market_type = MarketType.HK
         self.use_etfs = use_etfs
         self._last_request_time = 0
-        self._min_request_interval = 0.5
+        self._cache = {}  # 简单缓存
         
         if use_etfs and yf is None:
             raise ImportError("使用ETF模式需要yfinance: pip install yfinance")
@@ -69,9 +74,52 @@ class HKMarketDataFetcher(BaseDataFetcher):
         """请求频率限制"""
         current_time = time.time()
         elapsed = current_time - self._last_request_time
-        if elapsed < self._min_request_interval:
-            time.sleep(self._min_request_interval - elapsed)
+        if elapsed < REQUEST_INTERVAL:
+            time.sleep(REQUEST_INTERVAL - elapsed)
         self._last_request_time = time.time()
+    
+    def _fetch_with_retry(self, symbol: str, period: str = "5d"):
+        """带重试的数据获取
+        
+        Args:
+            symbol: ETF代码
+            period: 数据周期
+            
+        Returns:
+            DataFrame 或 None
+        """
+        for attempt in range(MAX_RETRIES):
+            try:
+                self._rate_limit()
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period=period)
+                
+                # 成功获取，更新缓存
+                if not hist.empty:
+                    self._cache[symbol] = {
+                        'data': hist.copy(),
+                        'timestamp': datetime.now()
+                    }
+                
+                return hist
+                
+            except Exception as e:
+                if "Rate limited" in str(e) or "Too Many Requests" in str(e):
+                    delay = BASE_DELAY * (2 ** attempt)  # 指数退避
+                    self.logger.warning(f"{symbol} 请求被限流，{delay}秒后重试 (第{attempt+1}/{MAX_RETRIES}次)...")
+                    time.sleep(delay)
+                else:
+                    self.logger.error(f"{symbol} 获取失败: {e}")
+                    break
+        
+        # 所有重试失败，返回缓存数据（如果有且不太旧）
+        if symbol in self._cache:
+            cache_age = (datetime.now() - self._cache[symbol]['timestamp']).total_seconds()
+            if cache_age < 3600:  # 缓存1小时内有效
+                self.logger.info(f"{symbol} 使用缓存数据（{cache_age:.0f}秒前）")
+                return self._cache[symbol]['data']
+        
+        return None
     
     def get_sector_data(self, trade_date: Optional[str] = None) -> pd.DataFrame:
         """获取港股板块数据
@@ -99,10 +147,10 @@ class HKMarketDataFetcher(BaseDataFetcher):
             
             for sector_name, symbol in HK_SECTOR_ETFS.items():
                 try:
-                    ticker = yf.Ticker(symbol)
-                    hist = ticker.history(period="5d")
+                    # 使用带重试的获取方法
+                    hist = self._fetch_with_retry(symbol, period="5d")
                     
-                    if hist.empty or len(hist) < 1:
+                    if hist is None or hist.empty or len(hist) < 1:
                         self.logger.warning(f"无法获取 {symbol} 数据")
                         continue
                     
@@ -270,10 +318,10 @@ class HKMarketDataFetcher(BaseDataFetcher):
             
             self.logger.info(f"正在获取 {etf_symbol} ({sector_name}) 的历史数据...")
             
-            ticker = yf.Ticker(etf_symbol)
-            hist = ticker.history(period=f"{days + 5}d")
+            # 使用带重试的获取方法
+            hist = self._fetch_with_retry(etf_symbol, period=f"{days + 5}d")
             
-            if hist.empty:
+            if hist is None or hist.empty:
                 return pd.DataFrame()
             
             hist = hist.reset_index()
